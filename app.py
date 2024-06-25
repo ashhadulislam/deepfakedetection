@@ -5,6 +5,15 @@ from PIL import Image
 import os
 # os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
+from supabase import create_client, Client
+
+
+# Initialize Supabase client
+SUPABASE_URL = "https://kwmpxpodmpwplujkpwjn.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt3bXB4cG9kbXB3cGx1amtwd2puIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxOTMzMzMwNywiZXhwIjoyMDM0OTA5MzA3fQ.ZZM2pFJeBi3Tl6xI1NNzv3f4ETs2iIcS1EqkIowuO-M"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
 
 # Define the path to the saved model
 MODEL_PATH = "models/buildings_deepfake_detector_mobilenet_v3_small_ep_10.pth"
@@ -43,6 +52,12 @@ Welcome to the Building Authenticity Classifier! This platform allows you to upl
 determine whether they are real or fake. Our model has been trained to provide accurate classifications based on your uploaded images.
 """)
 
+# Initialize session state for email and feedback
+if 'email' not in st.session_state:
+    st.session_state.email = ""
+if 'prediction' not in st.session_state:
+    st.session_state.prediction = ""
+
 # File uploader
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
@@ -50,15 +65,38 @@ if uploaded_file is not None:
     # Load the uploaded image
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
+    
+    # Email input
+    st.session_state.email = st.text_input("Enter your email to see whether its fake:", value=st.session_state.email)
+    
+    if st.session_state.email:
+        if st.button("Submit"):
+            # Transform the image and prepare it for prediction
+            image_tensor = image_transforms(image).unsqueeze(0).to(device)
+            
+            # Predict the class
+            with torch.no_grad():
+                outputs = model(image_tensor)
+                _, predicted = torch.max(outputs, 1)
+                st.session_state.prediction = class_names[predicted.item()]
+            
+            # Display the prediction
+            st.write(f"Prediction: This is **{st.session_state.prediction.capitalize()}**")
 
-    # Transform the image and prepare it for prediction
-    image_tensor = image_transforms(image).unsqueeze(0).to(device)
+if st.session_state.prediction:
+    # Thumbs up/down feedback
+    feedback = st.radio("Was this prediction helpful?", ("", "Yes", "No"))
+    if feedback:
+        with open("feedback.txt", "a") as f:
+            f.write(f"Email: {st.session_state.email}, Prediction: {st.session_state.prediction}, Feedback: {feedback}\n")
+        response = supabase.table('UserFeedback').insert({
+            'email_id': st.session_state.email,            
+            'feedback': feedback
+        }).execute()
+        
+        # print(response.__dir__())
 
-    # Predict the class
-    with torch.no_grad():
-        outputs = model(image_tensor)
-        _, predicted = torch.max(outputs, 1)
-        predicted_class = class_names[predicted.item()]
-
-    # Display the prediction
-    st.write(f"Prediction: **{predicted_class.capitalize()}**")
+        if response:  # Check for an error in the response
+            st.success("Thank you for your feedback!")
+        else:
+            st.error("There was an error submitting your feedback. Please try again.")
